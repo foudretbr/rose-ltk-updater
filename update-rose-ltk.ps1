@@ -19,7 +19,12 @@ if (-not $isAdmin) {
     $scriptArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     if ($Force) { $scriptArgs += " -Force" }
     if ($RosePath) { $scriptArgs += " -RosePath `"$RosePath`"" }
-    Start-Process powershell.exe -Verb RunAs -ArgumentList $scriptArgs
+    try {
+        Start-Process powershell.exe -Verb RunAs -ArgumentList $scriptArgs
+    } catch {
+        Write-Host "[-] Administrator elevation was denied or failed." -ForegroundColor Red
+        Read-Host "`nPress Enter to exit..."
+    }
     exit
 }
 
@@ -115,8 +120,13 @@ if (-not $7z) {
         if ($install7z -match "^[yYoO]") {
             Write-Host "[*] Installing 7-Zip..." -ForegroundColor Yellow
             Start-Process -FilePath "winget" -ArgumentList "install --id 7zip.7zip -e --source winget --accept-source-agreements --accept-package-agreements --silent" -Wait -NoNewWindow
-            $candidate = Join-Path $env:ProgramFiles "7-Zip\7z.exe"
-            if (Test-Path $candidate) { $7z = $candidate }
+            $searchAfterInstall = @(
+                (Join-Path $env:ProgramFiles "7-Zip\7z.exe"),
+                (Join-Path ${env:ProgramFiles(x86)} "7-Zip\7z.exe")
+            )
+            foreach ($cand in $searchAfterInstall) {
+                if (Test-Path $cand) { $7z = $cand; break }
+            }
         }
     }
 
@@ -176,15 +186,33 @@ if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction Sile
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 $setupPath = Join-Path $tempDir $assetName
 
-# 5. Download the installer
+# 5. Download the installer (optimisé avec curl.exe si disponible, fallback Invoke-WebRequest rapide)
 Write-Host "[*] Downloading installer..." -ForegroundColor Yellow
-try {
-    Invoke-WebRequest -Uri $downloadUrl -OutFile $setupPath
-} catch {
-    Write-Host "[-] Failed to download installer from: $downloadUrl" -ForegroundColor Red
-    Write-Host "    Error: $_" -ForegroundColor Red
-    Read-Host "`nPress Enter to exit..."
-    exit 1
+$curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+$downloadSuccess = $false
+
+if ($curl) {
+    try {
+        & $curl.Source -L -s -S -o "$setupPath" "$downloadUrl"
+        if ((Test-Path $setupPath) -and (Get-Item $setupPath).Length -gt 1MB) {
+            $downloadSuccess = $true
+        }
+    } catch {}
+}
+
+if (-not $downloadSuccess) {
+    try {
+        $origProgress = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $setupPath
+        $ProgressPreference = $origProgress
+        $downloadSuccess = $true
+    } catch {
+        Write-Host "[-] Failed to download installer from: $downloadUrl" -ForegroundColor Red
+        Write-Host "    Error: $_" -ForegroundColor Red
+        Read-Host "`nPress Enter to exit..."
+        exit 1
+    }
 }
 
 # 6. Extract patcher binaries using 7-Zip
@@ -201,24 +229,32 @@ if (-not (Test-Path $newDll) -or -not (Test-Path $newHost)) {
     exit 1
 }
 
-# 7. Backup and update files in Rose
+# 7. Backup and update files in Rose (avec gestion de verrouillage)
 Write-Host "[*] Installing updated binaries into Rose..." -ForegroundColor Yellow
 
 $targetDll = Join-Path $roseToolsDir "ltk_patcher_dll.dll"
 $targetHost = Join-Path $roseToolsDir "ltk_patcher_host.exe"
 
-if (Test-Path $targetDll) {
-    Copy-Item $targetDll (Join-Path $roseToolsDir "ltk_patcher_dll.dll.bak") -Force
-}
-if (Test-Path $targetHost) {
-    Copy-Item $targetHost (Join-Path $roseToolsDir "ltk_patcher_host.exe.bak") -Force
-}
+try {
+    if (Test-Path $targetDll) {
+        Copy-Item $targetDll (Join-Path $roseToolsDir "ltk_patcher_dll.dll.bak") -Force
+    }
+    if (Test-Path $targetHost) {
+        Copy-Item $targetHost (Join-Path $roseToolsDir "ltk_patcher_host.exe.bak") -Force
+    }
 
-Copy-Item $newDll $targetDll -Force
-Copy-Item $newHost $targetHost -Force
+    Copy-Item $newDll $targetDll -Force
+    Copy-Item $newHost $targetHost -Force
 
-# Save version file
-Set-Content -Path $versionFile -Value $latestTag -Force
+    # Save version file
+    Set-Content -Path $versionFile -Value $latestTag -Force
+} catch {
+    Write-Host "[-] Failed to overwrite files in Rose tools directory." -ForegroundColor Red
+    Write-Host "    The files might currently be locked by Rose or a running game match." -ForegroundColor Yellow
+    Write-Host "    Please close Rose and any League of Legends process, then run the updater again." -ForegroundColor Yellow
+    Read-Host "`nPress Enter to exit..."
+    exit 1
+}
 
 # 8. Cleanup
 Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
