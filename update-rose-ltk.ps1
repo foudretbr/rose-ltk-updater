@@ -229,6 +229,33 @@ if (-not (Test-Path $newDll) -or -not (Test-Path $newHost)) {
     exit 1
 }
 
+# 6b. Automatically patch EOL (End of Life) comparison check
+# Riot micro-patches frequently update the game build before LeagueToolkit publishes a new release.
+# Bypassing this hardcoded timestamp check allows the patcher to run smoothly on hotfix builds.
+try {
+    $dllBytes = [System.IO.File]::ReadAllBytes($newDll)
+    $patchedEol = $false
+    for ($i = 0; $i -lt ($dllBytes.Length - 10); $i++) {
+        if ($dllBytes[$i] -eq 0x3D -and $dllBytes[$i+5] -eq 0x0F -and $dllBytes[$i+6] -eq 0x86) {
+            $ts = [System.BitConverter]::ToUInt32($dllBytes, $i + 1)
+            if ($ts -gt 1700000000 -and $ts -lt 1900000000) {
+                $dllBytes[$i+1] = 0xFF
+                $dllBytes[$i+2] = 0xFF
+                $dllBytes[$i+3] = 0xFF
+                $dllBytes[$i+4] = 0x7F
+                $patchedEol = $true
+                break
+            }
+        }
+    }
+    if ($patchedEol) {
+        [System.IO.File]::WriteAllBytes($newDll, $dllBytes)
+        Write-Host "[+] Automatically unlocked patcher EOL constraint for the current LoL build." -ForegroundColor Green
+    }
+} catch {
+    Write-Host "[!] Note: Could not auto-patch EOL constraint ($($_)). Continuing with original DLL." -ForegroundColor Gray
+}
+
 # 7. Backup and update files in Rose (avec gestion de verrouillage)
 Write-Host "[*] Installing updated binaries into Rose..." -ForegroundColor Yellow
 
