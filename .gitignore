@@ -1,4 +1,5 @@
 *.bak
 *.tmp
+*.zip
 extracted/
 temp/
