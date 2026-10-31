@@ -1,7 +1,7 @@
 # ==============================================================================
 # Rose LTK Patcher Auto-Updater
 # Automatically updates ltk_patcher_dll.dll and ltk_patcher_host.exe in Rose
-# Repository: https://github.com/your-username/rose-ltk-updater
+# Repository: https://github.com/foudretbr/rose-ltk-updater
 # ==============================================================================
 [CmdletBinding()]
 param (
